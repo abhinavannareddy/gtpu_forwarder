@@ -1,0 +1,8 @@
+gtpu-fwd
+loadgen
+tests/unit
+tests/unit_asan
+.fwd.pid
+.fwd.out
+__pycache__/
+.pytest_cache/
