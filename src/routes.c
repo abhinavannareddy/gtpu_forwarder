@@ -49,13 +49,49 @@ int routes_add(route_table *t, uint32_t in_teid, uint32_t out_teid,
     return 0;
 }
 
-const route_entry *routes_lookup(const route_table *t, uint32_t in_teid)
+route_entry *routes_lookup(const route_table *t, uint32_t in_teid)
 {
     size_t i = hash32(in_teid) & (t->cap - 1);
     while (t->slots[i].used) {
         if (t->slots[i].in_teid == in_teid)
             return &t->slots[i];
         i = (i + 1) & (t->cap - 1);
+    }
+    return NULL;
+}
+
+int routes_remove(route_table *t, uint32_t in_teid)
+{
+    size_t mask = t->cap - 1;
+    size_t i = hash32(in_teid) & mask;
+    while (t->slots[i].used && t->slots[i].in_teid != in_teid)
+        i = (i + 1) & mask;
+    if (!t->slots[i].used)
+        return -1;
+    /* Backward-shift: pull later members of the probe chain into the hole. */
+    size_t j = i;
+    for (;;) {
+        j = (j + 1) & mask;
+        if (!t->slots[j].used)
+            break;
+        size_t home = hash32(t->slots[j].in_teid) & mask;
+        /* Slot j may move to i unless its home lies cyclically in (i, j]. */
+        if (((j - home) & mask) >= ((j - i) & mask)) {
+            t->slots[i] = t->slots[j];
+            i = j;
+        }
+    }
+    memset(&t->slots[i], 0, sizeof t->slots[i]);
+    t->count--;
+    return 0;
+}
+
+const route_entry *routes_next(const route_table *t, size_t *cursor)
+{
+    while (*cursor < t->cap) {
+        const route_entry *e = &t->slots[(*cursor)++];
+        if (e->used)
+            return e;
     }
     return NULL;
 }

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTP-U Control Room</title>
+<meta name="description" content="Live control room for the gtpu-fwd GTP-U user-plane forwarder: throughput, drops, routes, a packet lab and a traffic generator.">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#overview">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="#overview" aria-label="GTP-U Control Room">
+    <img src="img/logo.svg" alt="" width="28" height="28"><span>GTP-U <b>Control Room</b></span>
+  </a>
+  <nav aria-label="Sections">
+    <a href="#live">Live</a><a href="#routes">Routes</a><a href="#lab">Packet lab</a>
+    <a href="#traffic">Traffic</a><a href="#how">How it works</a>
+  </nav>
+  <div class="top-right">
+    <span id="conn" class="pill pill-wait" role="status"><i></i><span>connecting</span></span>
+    <button id="theme" class="icon-btn" type="button" aria-label="Toggle light and dark theme" title="Toggle theme">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="currentColor"/></svg>
+    </button>
+  </div>
+</header>
+
+<div id="offline" class="banner" hidden>
+  <strong>Forwarder offline.</strong> <span id="offline-msg">The dashboard cannot reach the control socket.</span>
+  Start it with <code>./gtpu-fwd -r routes.example.conf -c 9100</code> or run <code>make demo</code>.
+</div>
+
+<main>
+<!-- ============ Overview ============ -->
+<section id="overview" class="hero">
+  <div class="hero-copy">
+    <p class="eyebrow">5G / LTE user plane &middot; 3GPP TS 29.281</p>
+    <h1>Every tunnel, every packet, <span class="grad">in real time.</span></h1>
+    <p class="lede">
+      <code>gtpu-fwd</code> is a C packet forwarder that validates GTP-U headers, looks up the tunnel
+      endpoint ID, rewrites it and relays the packet to the next hop. This control room shows it working:
+      live counters, per-route traffic, and a lab to break packets on purpose.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#lab">Open the packet lab</a>
+      <a class="btn" href="#traffic">Generate traffic</a>
+    </div>
+  </div>
+  <figure class="pipeline" aria-label="Animated diagram of packets flowing from a phone through a base station and the forwarder to the core network">
+    <svg id="pipe" viewBox="0 0 760 330" role="img" aria-labelledby="pipe-title">
+      <title id="pipe-title">Packets travel from a phone, over the base station, through gtpu-fwd to the core network. Invalid packets are dropped at the forwarder.</title>
+      <defs>
+        <linearGradient id="g-line" x1="0" x2="1"><stop offset="0" stop-color="var(--c-rx)"/><stop offset="1" stop-color="var(--c-fwd)"/></linearGradient>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <!-- links -->
+      <path id="p-a" class="link" d="M86 175 H318"/>
+      <path id="p-b" class="link" d="M442 175 H506"/>
+      <path id="p-c" class="link" d="M574 175 H656"/>
+      <path id="p-drop" class="link dropline" d="M380 227 V290"/>
+      <!-- phone -->
+      <g transform="translate(60 120)">
+        <rect x="-26" y="0" width="52" height="96" rx="9" class="node-body"/>
+        <rect x="-20" y="10" width="40" height="64" rx="3" class="node-screen"/>
+        <circle cx="0" cy="84" r="4" class="node-dot"/>
+        <path d="M-9 28h18M-9 38h12M-9 48h15" class="node-lines"/>
+      </g>
+      <text x="60" y="244" class="lbl" text-anchor="middle">Phone (UE)</text>
+      <!-- tower -->
+      <g transform="translate(205 108)">
+        <path d="M0 8 L-22 100 M0 8 L22 100 M-14 55 H14 M-8 32 H8 M-19 80 H19" class="tower"/>
+        <circle cx="0" cy="4" r="6" class="node-dot"/>
+        <path d="M-16 -8a22 22 0 0 1 32 0M-26 -18a36 36 0 0 1 52 0" class="waves"/>
+      </g>
+      <text x="205" y="244" class="lbl" text-anchor="middle">gNodeB</text>
+      <!-- forwarder -->
+      <g transform="translate(380 175)" filter="url(#glow)">
+        <rect x="-62" y="-52" width="124" height="104" rx="16" class="fwd-body"/>
+        <rect x="-46" y="-36" width="92" height="14" rx="4" class="rack"/>
+        <rect x="-46" y="-16" width="92" height="14" rx="4" class="rack"/>
+        <rect x="-46" y="4" width="92" height="14" rx="4" class="rack"/>
+        <circle cx="-36" cy="-29" r="3" class="led"/><circle cx="-36" cy="-9" r="3" class="led led2"/><circle cx="-36" cy="11" r="3" class="led led3"/>
+        <text x="0" y="40" text-anchor="middle" class="fwd-lbl">gtpu-fwd</text>
+      </g>
+      <text x="380" y="262" class="lbl" text-anchor="middle" id="drop-lbl">dropped</text>
+      <!-- gateway -->
+      <g transform="translate(540 130)">
+        <rect x="-34" y="0" width="68" height="90" rx="10" class="node-body"/>
+        <rect x="-24" y="10" width="48" height="12" rx="3" class="rack"/><rect x="-24" y="30" width="48" height="12" rx="3" class="rack"/><rect x="-24" y="50" width="48" height="12" rx="3" class="rack"/>
+        <circle cx="-14" cy="76" r="3" class="led"/>
+      </g>
+      <text x="540" y="244" class="lbl" text-anchor="middle">UPF / next hop</text>
+      <!-- cloud -->
+      <g transform="translate(690 175)">
+        <path d="M-34 14a16 16 0 0 1 4-31a22 22 0 0 1 42-6a18 18 0 0 1 14 37z" class="node-body"/>
+        <text x="0" y="40" text-anchor="middle" class="lbl">Internet</text>
+      </g>
+      <g id="dots"></g>
+      <g id="bursts"></g>
+    </svg>
+    <figcaption>Dot density follows the live packet rate. <span class="k k-fwd">Forwarded</span> <span class="k k-drop">Dropped</span></figcaption>
+  </figure>
+</section>
+
+<section class="kpis" aria-label="Key figures">
+  <article class="kpi" data-k="pps"><h3>Ingress rate</h3><p class="val"><span id="k-pps">&ndash;</span><small> pkt/s</small></p><canvas class="spark" id="s-pps" width="240" height="40" aria-hidden="true"></canvas></article>
+  <article class="kpi" data-k="fwd"><h3>Forwarded</h3><p class="val"><span id="k-fwd">&ndash;</span></p><p class="sub" id="k-fwd-sub">&nbsp;</p><canvas class="spark" id="s-fwd" width="240" height="40" aria-hidden="true"></canvas></article>
+  <article class="kpi" data-k="drop"><h3>Dropped</h3><p class="val"><span id="k-drop">&ndash;</span></p><p class="sub" id="k-drop-sub">&nbsp;</p><canvas class="spark" id="s-drop" width="240" height="40" aria-hidden="true"></canvas></article>
+  <article class="kpi" data-k="bps"><h3>Throughput</h3><p class="val"><span id="k-bps">&ndash;</span><small id="k-bps-unit"></small></p><canvas class="spark" id="s-bps" width="240" height="40" aria-hidden="true"></canvas></article>
+  <article class="kpi" data-k="echo"><h3>Echo replies</h3><p class="val"><span id="k-echo">&ndash;</span></p><p class="sub">path keepalives answered</p></article>
+  <article class="kpi" data-k="up"><h3>Uptime</h3><p class="val"><span id="k-up">&ndash;</span></p><p class="sub" id="k-routes">&nbsp;</p></article>
+</section>
+
+<!-- ============ Live ============ -->
+<section id="live" class="panel-grid">
+  <div class="panel wide">
+    <div class="panel-head">
+      <div><h2>Packets per second</h2><p class="muted">Last two minutes, sampled every 0.5 s</p></div>
+      <div class="chart-tools">
+        <ul class="legend" id="legend"></ul>
+        <button class="btn small" id="tbl-toggle" type="button" aria-pressed="false">Table view</button>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chart-wrap">
+      <canvas id="chart" role="img" aria-label="Line chart of received, forwarded and dropped packets per second"></canvas>
+      <div id="tip" class="tip" hidden></div>
+    </div>
+    <div id="chart-table" class="tbl-scroll" hidden></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><div><h2>Why packets die</h2><p class="muted">Drops by reason since start</p></div></div>
+    <ul id="drops" class="bars"></ul>
+    <p id="drops-empty" class="muted" hidden>No drops yet. Try the packet lab.</p>
+  </div>
+</section>
+
+<!-- ============ Routes ============ -->
+<section id="routes">
+  <div class="panel">
+    <div class="panel-head">
+      <div><h2>Route table</h2><p class="muted">Incoming TEID &rarr; rewritten TEID and next hop. Changes apply instantly, no restart.</p></div>
+      <label class="search"><span class="sr">Filter routes</span><input id="route-filter" type="search" placeholder="Filter by TEID or site"></label>
+    </div>
+    <form id="route-form" class="route-form" autocomplete="off">
+      <label>In TEID<input name="in_teid" type="number" min="0" max="4294967295" required placeholder="1004"></label>
+      <label>Out TEID<input name="out_teid" type="number" min="0" max="4294967295" required placeholder="2004"></label>
+      <label>Next hop<input name="next_hop" type="text" required placeholder="127.0.0.1:9004" pattern="[0-9.]+:[0-9]+"></label>
+      <button class="btn primary" type="submit">Add route</button>
+    </form>
+    <div class="tbl-scroll">
+      <table id="route-table">
+        <thead><tr><th>Site</th><th class="num">In TEID</th><th class="num">Out TEID</th><th>Next hop</th><th class="num">Packets</th><th class="num">Bytes</th><th>Share</th><th><span class="sr">Actions</span></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p id="routes-empty" class="muted" hidden>No routes match.</p>
+  </div>
+</section>
+
+<!-- ============ Packet lab ============ -->
+<section id="lab">
+  <div class="panel">
+    <div class="panel-head"><div><h2>Packet lab</h2><p class="muted">Build a GTP-U packet byte by byte, ask the real C parser what it thinks (dry run), or fire it at the forwarder.</p></div></div>
+    <div class="lab">
+      <div class="lab-left">
+        <h3 class="mini">Scenarios</h3>
+        <div id="presets" class="chips" role="group" aria-label="Packet scenarios"></div>
+        <p id="preset-blurb" class="muted blurb"></p>
+        <h3 class="mini">Fields</h3>
+        <form id="lab-form" class="lab-form" autocomplete="off">
+          <label>Version<input name="version" type="number" min="0" max="7"></label>
+          <label>PT bit<input name="pt" type="number" min="0" max="1"></label>
+          <label>Message type<select name="msgType"><option value="255">255 G-PDU</option><option value="1">1 Echo Request</option><option value="2">2 Echo Response</option><option value="26">26 Error Indication</option><option value="254">254 End Marker</option></select></label>
+          <label>TEID<input name="teid" type="number" min="0" max="4294967295"></label>
+          <label>Payload bytes<input name="payloadLen" type="number" min="0" max="1400"></label>
+          <label>Length error<input name="lengthDelta" type="number" min="-200" max="200"></label>
+          <label>Extension<select name="ext"><option value="none">none</option><option value="valid">valid (PDU session)</option><option value="zero">zero length (hostile)</option></select></label>
+          <label>Sequence<input name="seq" type="number" min="0" max="65535"></label>
+          <label class="check"><input name="s" type="checkbox"> S flag</label>
+          <label class="check"><input name="pn" type="checkbox"> PN flag</label>
+        </form>
+      </div>
+      <div class="lab-right">
+        <h3 class="mini">Bytes on the wire <span id="byte-count" class="muted"></span></h3>
+        <div id="hex" class="hexgrid" aria-label="Packet bytes"></div>
+        <ul id="field-legend" class="field-legend"></ul>
+        <div class="lab-actions">
+          <button class="btn" id="btn-inspect" type="button">Dry run</button>
+          <button class="btn primary" id="btn-send" type="button">Send to forwarder</button>
+          <button class="btn" id="btn-burst" type="button">Send &times;100</button>
+        </div>
+        <div id="verdict" class="verdict" hidden aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Traffic ============ -->
+<section id="traffic">
+  <div class="panel traffic">
+    <div class="panel-head"><div><h2>Traffic generator</h2><p class="muted">Drives the forwarder with a realistic mix so every counter moves. Adjust while it runs.</p></div>
+      <span id="tg-state" class="pill pill-off"><i></i><span>idle</span></span></div>
+    <div class="tg-grid">
+      <div class="tg-rate">
+        <label for="tg-pps">Rate <output id="tg-pps-out">300 pkt/s</output></label>
+        <input id="tg-pps" type="range" min="0" max="1000" value="400" step="1">
+        <div class="tg-btns"><button class="btn primary" id="tg-start" type="button">Start</button><button class="btn" id="tg-stop" type="button">Stop</button></div>
+        <p class="muted" id="tg-sent"></p>
+      </div>
+      <div class="tg-mix" id="tg-mix"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ How it works ============ -->
+<section id="how">
+  <div class="how-head"><h2>How a packet is handled</h2><p class="muted">Five checks, one lookup, one rewrite. Anything else is counted and dropped, never crashed on.</p></div>
+  <ol class="steps">
+    <li><span class="n">1</span><h3>Receive</h3><p><code>recvmmsg</code> pulls up to 32 datagrams per syscall into preallocated buffers.</p></li>
+    <li><span class="n">2</span><h3>Validate</h3><p>Version 1, PT bit, length vs. datagram size, then a bounds-checked walk of the extension chain.</p></li>
+    <li><span class="n">3</span><h3>Classify</h3><p>Echo Request is answered; G-PDU continues; every other type is dropped.</p></li>
+    <li><span class="n">4</span><h3>Look up</h3><p>Open-addressing hash table keyed by TEID, O(1), with per-route counters.</p></li>
+    <li><span class="n">5</span><h3>Rewrite &amp; send</h3><p>The 4-byte TEID is overwritten in place and the datagram goes to the next hop.</p></li>
+  </ol>
+
+  <div class="panel hdr-panel">
+    <h3>The GTP-U header</h3>
+    <div class="bits" role="img" aria-label="GTP-U header: 32-bit rows. Row 1: flags, message type, length. Row 2: TEID. Row 3 (optional): sequence number, N-PDU number, next extension header type.">
+      <div class="bit-ruler"><span>0</span><span>8</span><span>16</span><span>24</span><span>31</span></div>
+      <div class="bit-row"><div class="bf f-flags" style="--w:25">Flags<small>ver 3 &middot; PT 1 &middot; &ndash; 1 &middot; E S PN</small></div><div class="bf f-type" style="--w:25">Message type<small>255 = G-PDU</small></div><div class="bf f-len" style="--w:50">Length<small>bytes after the first 8</small></div></div>
+      <div class="bit-row"><div class="bf f-teid" style="--w:100">Tunnel Endpoint ID (TEID)<small>the field gtpu-fwd rewrites</small></div></div>
+      <div class="bit-row opt"><div class="bf f-opt" style="--w:50">Sequence number<small>if S=1</small></div><div class="bf f-opt" style="--w:25">N-PDU<small>if PN=1</small></div><div class="bf f-opt" style="--w:25">Next ext.<small>if E=1</small></div></div>
+      <div class="bit-row"><div class="bf f-pay" style="--w:100">Inner IP packet (payload)<small>forwarded untouched</small></div></div>
+    </div>
+  </div>
+
+  <div class="facts">
+    <div><b>IPv4</b><span>next hops and sockets</span></div>
+    <div><b>32</b><span>packets per recvmmsg batch</span></div>
+    <div><b>0</b><span>heap allocation on the hot path</span></div>
+    <div><b>ASan + Valgrind</b><span>clean in CI</span></div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p><b>gtpu-fwd</b> &middot; GTP-U user-plane forwarder in C11 &middot; control room served by <code>dashboard/server.py</code> &middot; no external requests are made by this page.</p>
+</footer>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="packet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,10 +1,10 @@
 CC      ?= gcc
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -D_DEFAULT_SOURCE
-SRC      = src/gtpu.c src/routes.c
+SRC      = src/gtpu.c src/routes.c src/ctl.c
 
 all: gtpu-fwd loadgen
 
-gtpu-fwd: $(SRC) src/main.c src/gtpu.h src/routes.h
+gtpu-fwd: $(SRC) src/main.c src/gtpu.h src/routes.h src/ctl.h src/stats.h
 	$(CC) $(CFLAGS) -o $@ $(SRC) src/main.c
 
 loadgen: tools/loadgen.c
@@ -16,10 +16,23 @@ tests/unit: $(SRC) tests/test_gtpu.c
 test-unit: tests/unit
 	./tests/unit
 
+# Forwarder, control socket and dashboard API tests (real binary, real sockets).
 test-integration: gtpu-fwd
-	python3 -m pytest -q tests/test_forwarder.py
+	python3 -m pytest -q tests
 
-test: test-unit test-integration
+# Dashboard front-end logic (packet builder); needs Node 18+.
+test-js:
+	node --test tests/test_packet.mjs
+
+test: test-unit test-integration test-js
+
+# Live control room with a built-in forwarder, sinks and traffic: http://127.0.0.1:8765
+demo: gtpu-fwd
+	python3 dashboard/server.py --demo
+
+# Control room for an already running forwarder (./gtpu-fwd -r routes.example.conf -c 9100).
+dashboard:
+	python3 dashboard/server.py --ctl 127.0.0.1:9100
 
 # AddressSanitizer + UBSan build of the unit tests.
 asan:
@@ -44,4 +57,4 @@ bench: gtpu-fwd loadgen
 clean:
 	rm -f gtpu-fwd loadgen tests/unit tests/unit_asan .fwd.pid
 
-.PHONY: all test test-unit test-integration asan valgrind bench clean
+.PHONY: all test test-unit test-integration test-js demo dashboard asan valgrind bench clean

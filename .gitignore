@@ -6,3 +6,5 @@ tests/unit_asan
 .fwd.out
 __pycache__/
 .pytest_cache/
+.scratch_run.sh
+*.pyc

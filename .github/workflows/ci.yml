@@ -18,11 +18,18 @@ jobs:
         run: make
       - name: Unit tests
         run: make test-unit
-      - name: Integration tests
+      - name: Integration tests (forwarder, control socket, dashboard API)
         run: make test-integration
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Dashboard front-end tests
+        run: make test-js
       - name: AddressSanitizer and UBSan
         run: make asan
       - name: Valgrind
         run: make valgrind
-      - name: Build container image
-        run: docker build -t gtpu-fwd .
+      - name: Build container images
+        run: |
+          docker build -t gtpu-fwd .
+          docker build -f Dockerfile.dashboard -t gtpu-dashboard .
