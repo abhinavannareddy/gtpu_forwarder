@@ -1,11 +1,14 @@
 # Forwarder + control room on a private network.
 #   docker compose up --build   ->  http://localhost:8765
-# The control socket (unauthenticated) is reachable only inside this network;
-# only the dashboard (loopback) and the GTP-U port are published.
+# The control socket is reachable only inside this network and is protected by
+# a token: set GTPU_CTL_TOKEN in your environment (the default is a demo value).
+# Only the dashboard (on loopback) and the GTP-U port are published.
 services:
   fwd:
     build: .
-    command: ["-r", "/etc/gtpu/routes.conf", "-c", "9100", "-C", "0.0.0.0"]
+    command: ["-r", "/etc/gtpu/routes.conf", "-w", "2", "-c", "9100", "-C", "0.0.0.0"]
+    environment:
+      GTPU_CTL_TOKEN: ${GTPU_CTL_TOKEN:-demo-token-change-me}
     volumes:
       - ./deploy/routes.compose.conf:/etc/gtpu/routes.conf:ro
     ports:
@@ -21,6 +24,8 @@ services:
               "--sinks", "0.0.0.0", "--traffic", "200"]
     ports:
       - "127.0.0.1:8765:8765"
+    environment:
+      GTPU_CTL_TOKEN: ${GTPU_CTL_TOKEN:-demo-token-change-me}
     depends_on: [fwd]
     networks:
       gtpu: { ipv4_address: 172.28.0.20 }

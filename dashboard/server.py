@@ -269,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(HTTPStatus.BAD_REQUEST, "hex must be a valid hex string")
         if not 0 < len(raw) <= 2048:
             return self._error(HTTPStatus.BAD_REQUEST, "packet must be 1..2048 bytes")
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = socket.socket(udp_family(self.state.fwd_addr[0]), socket.SOCK_DGRAM)
         sock.settimeout(0.4)
         reply = None
         try:
@@ -316,9 +316,13 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def udp_family(host):
+    return socket.AF_INET6 if ":" in host else socket.AF_INET
+
+
 def hostport(s):
     host, _, port = s.rpartition(":")
-    return host or "127.0.0.1", int(port)
+    return host.strip("[]") or "127.0.0.1", int(port)      # "[::1]:2152" works too
 
 
 def attach_sinks(state, host):
@@ -339,9 +343,11 @@ def start_demo_forwarder(args, state):
     for in_t, out_t, port, _ in DEMO_ROUTES:
         routes.write(f"{in_t} {out_t} 127.0.0.1:{port}\n")
     routes.close()
-    proc = subprocess.Popen([binary, "-r", routes.name, "-b", fwd_host, "-p", str(fwd_port),
-                             "-c", str(ctl_port), "-C", ctl_host],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    cmd = [binary, "-r", routes.name, "-b", fwd_host, "-p", str(fwd_port),
+           "-c", str(ctl_port), "-C", ctl_host, "-w", str(args.workers)]
+    if args.ctl_token:
+        cmd += ["-t", args.ctl_token]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.3)
     if proc.poll() is not None:
         sys.exit("demo forwarder failed to start (port in use?)")
@@ -353,14 +359,17 @@ def main():
     ap.add_argument("--listen", default="127.0.0.1:8765", help="dashboard HTTP address")
     ap.add_argument("--fwd", default="127.0.0.1:2152", help="forwarder GTP-U address")
     ap.add_argument("--ctl", default="127.0.0.1:9100", help="forwarder control socket address")
+    ap.add_argument("--ctl-token", default=os.environ.get("GTPU_CTL_TOKEN"),
+                    help="control socket token (default: $GTPU_CTL_TOKEN)")
     ap.add_argument("--demo", action="store_true", help="start a forwarder with sinks and background traffic")
     ap.add_argument("--bin", help="path to gtpu-fwd (demo mode)")
+    ap.add_argument("--workers", type=int, default=2, help="forwarder worker threads (demo mode)")
     ap.add_argument("--sinks", metavar="HOST", help="also listen on the demo next-hop ports 9000-9003 at HOST")
     ap.add_argument("--traffic", type=int, metavar="PPS", help="start background traffic at this rate")
     args = ap.parse_args()
 
     ctl_host, ctl_port = hostport(args.ctl)
-    state = State(CtlClient(ctl_host, ctl_port), hostport(args.fwd))
+    state = State(CtlClient(ctl_host, ctl_port, token=args.ctl_token), hostport(args.fwd))
     Handler.state = state
     httpd = ThreadingHTTPServer(hostport(args.listen), Handler)   # bind first: fail before spawning
     httpd.daemon_threads = True

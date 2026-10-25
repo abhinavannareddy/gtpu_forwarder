@@ -106,31 +106,31 @@ static void test_fuzz_never_crashes(void)
     CHECK(1);
 }
 
+typedef struct { struct sockaddr_storage ss; socklen_t len; } hop_t;
+
+static hop_t hop(unsigned port)
+{
+    hop_t h; char text[32];
+    snprintf(text, sizeof text, "127.0.0.1:%u", port);
+    CHECK(routes_parse_hop(text, &h.ss, &h.len) == 0);
+    return h;
+}
+
 static void test_routes(void)
 {
     route_table t;
     CHECK(routes_init(&t, 8) == 0);
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET; a.sin_port = htons(9000);
-    inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-    CHECK(routes_add(&t, 100, 200, &a) == 0);
-    CHECK(routes_add(&t, 100, 300, &a) == -1);     /* duplicate */
+    hop_t a = hop(9000);
+    CHECK(routes_add(&t, 100, 200, &a.ss, a.len) == 0);
+    CHECK(routes_add(&t, 100, 300, &a.ss, a.len) == -1);     /* duplicate */
     const route_entry *r = routes_lookup(&t, 100);
-    CHECK(r && r->out_teid == 200 && ntohs(r->next_hop.sin_port) == 9000);
+    CHECK(r && r->out_teid == 200 && ntohs(((struct sockaddr_in *)&r->next_hop)->sin_port) == 9000);
     CHECK(routes_lookup(&t, 101) == NULL);
     for (uint32_t k = 1000; k < 1000 + 500; k++) {
-        if (routes_add(&t, k, k + 1, &a) != 0) break;
+        if (routes_add(&t, k, k + 1, &a.ss, a.len) != 0) break;
     }
     CHECK(routes_lookup(&t, 1000) != NULL);
     routes_free(&t);
-}
-
-static struct sockaddr_in hop(unsigned port)
-{
-    struct sockaddr_in a; memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-    return a;
 }
 
 static void test_routes_remove(void)
@@ -138,9 +138,9 @@ static void test_routes_remove(void)
     /* Removing from a heavily colliding table must keep every other key findable. */
     route_table t;
     CHECK(routes_init(&t, 64) == 0);
-    struct sockaddr_in a = hop(9000);
+    hop_t a = hop(9000);
     enum { N = 60 };
-    for (uint32_t k = 0; k < N; k++) CHECK(routes_add(&t, k * 7919u, k, &a) == 0);
+    for (uint32_t k = 0; k < N; k++) CHECK(routes_add(&t, k * 7919u, k, &a.ss, a.len) == 0);
     for (uint32_t k = 0; k < N; k += 2) CHECK(routes_remove(&t, k * 7919u) == 0);
     CHECK(routes_remove(&t, 123456789u) == -1);
     CHECK(t.count == N / 2);
@@ -151,7 +151,7 @@ static void test_routes_remove(void)
     size_t cur = 0, seen = 0;
     while (routes_next(&t, &cur)) seen++;
     CHECK(seen == N / 2);
-    CHECK(routes_add(&t, 0, 5, &a) == 0);              /* slot is reusable */
+    CHECK(routes_add(&t, 0, 5, &a.ss, a.len) == 0);              /* slot is reusable */
     routes_free(&t);
 }
 
@@ -160,11 +160,11 @@ static int contains(const char *hay, const char *needle) { return strstr(hay, ne
 static void test_ctl(void)
 {
     route_table t; routes_init(&t, 16);
-    struct sockaddr_in a = hop(9000);
-    routes_add(&t, 100, 200, &a);
+    hop_t a = hop(9000);
+    routes_add(&t, 100, 200, &a.ss, a.len);
     stats_t st; memset(&st, 0, sizeof st);
     st.rx = 7; st.forwarded = 5; st.drop_parse[GTPU_ERR_VERSION] = 2;
-    ctl_ctx c = { &st, &t, 1.5 };
+    ctl_ctx c = { &st, &t, 1.5, 1, 0, 0, NULL };
     char out[4096];
 #define CTL(str) ctl_handle(&c, str, strlen(str), out, sizeof out)
 
@@ -215,6 +215,131 @@ static void test_ctl(void)
 #undef CTL
 }
 
+static void test_hops_ipv6(void)
+{
+    struct sockaddr_storage ss; socklen_t sl; char buf[80];
+    CHECK(routes_parse_hop("[2001:db8::1]:2152", &ss, &sl) == 0 && ss.ss_family == AF_INET6);
+    routes_format_hop(&ss, buf, sizeof buf);
+    CHECK(strcmp(buf, "[2001:db8::1]:2152") == 0);
+    CHECK(routes_parse_hop("10.1.2.3:99", &ss, &sl) == 0 && ss.ss_family == AF_INET);
+    routes_format_hop(&ss, buf, sizeof buf);
+    CHECK(strcmp(buf, "10.1.2.3:99") == 0);
+    CHECK(routes_parse_hop("[::1]", &ss, &sl) == -1);          /* no port */
+    CHECK(routes_parse_hop("[::1:5", &ss, &sl) == -1);         /* unterminated */
+    CHECK(routes_parse_hop("::1:5", &ss, &sl) == -1);          /* v6 needs brackets */
+    CHECK(routes_parse_hop("1.2.3.4:0", &ss, &sl) == -1);
+    CHECK(routes_parse_hop("1.2.3.4:70000", &ss, &sl) == -1);
+    CHECK(routes_parse_hop("1.2.3.4:12x", &ss, &sl) == -1);
+    CHECK(routes_parse_hop("host:80", &ss, &sl) == -1);
+}
+
+static size_t make_ipv4(uint8_t *b, size_t total, int fix_sum)
+{
+    memset(b, 0, total);
+    b[0] = 0x45; b[2] = (uint8_t)(total >> 8); b[3] = (uint8_t)total; b[8] = 64; b[9] = 17;
+    b[12] = 10; b[15] = 1; b[16] = 10; b[19] = 2;
+    if (fix_sum) {
+        uint32_t sum = 0;
+        for (int i = 0; i < 20; i += 2) sum += (uint32_t)((b[i] << 8) | b[i + 1]);
+        while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+        b[10] = (uint8_t)(~sum >> 8); b[11] = (uint8_t)~sum;
+    }
+    return total;
+}
+
+static void test_inner_ip(void)
+{
+    uint8_t b[128];
+    make_ipv4(b, 60, 1);
+    CHECK(gtpu_inner_ok(b, 60) == 1);
+    CHECK(gtpu_inner_ok(b, 20) == 0);            /* total length beyond payload */
+    make_ipv4(b, 60, 0);
+    CHECK(gtpu_inner_ok(b, 60) == 0);                          /* checksum wrong */
+    make_ipv4(b, 60, 1); b[0] = 0x44;
+    CHECK(gtpu_inner_ok(b, 60) == 0);                          /* IHL below 5 */
+    make_ipv4(b, 60, 1); b[0] = 0x4F;
+    CHECK(gtpu_inner_ok(b, 60) == 0);                          /* IHL beyond payload checksum */
+    make_ipv4(b, 60, 1); b[2] = 0; b[3] = 10;
+    CHECK(gtpu_inner_ok(b, 60) == 0);                          /* total length below IHL */
+    memset(b, 0, sizeof b); b[0] = 0x60; b[5] = 20;
+    CHECK(gtpu_inner_ok(b, 60) == 1);                          /* IPv6, payload length fits */
+    b[5] = 90;
+    CHECK(gtpu_inner_ok(b, 60) == 0);
+    CHECK(gtpu_inner_ok(b, 39) == 0);
+    b[0] = 0x10;
+    CHECK(gtpu_inner_ok(b, 60) == 0);                          /* neither IPv4 nor IPv6 */
+    CHECK(gtpu_inner_ok(b, 0) == 0);
+    /* never reads out of bounds on short or random input (ASan) */
+    uint32_t x = 7;
+    for (int r = 0; r < 20000; r++) {
+        size_t len = (x >> 9) % 70;
+        for (size_t k = 0; k < len; k++) { x = x * 1664525u + 1013904223u; b[k] = (uint8_t)(x >> 24); }
+        if (len && (r & 1)) b[0] = (uint8_t)((b[0] & 0x0F) | 0x40);
+        (void)gtpu_inner_ok(b, len);
+    }
+}
+
+static void test_error_indication(void)
+{
+    uint8_t out[40]; gtpu_info i;
+    const uint8_t a4[4] = { 192, 0, 2, 7 };
+    size_t n = gtpu_make_error_indication(0xA1B2C3D4, a4, 4, out, sizeof out);
+    CHECK(n == 8 + 4 + 5 + 3 + 4);
+    CHECK(gtpu_parse(out, n, &i) == GTPU_OK && i.msg_type == GTPU_MSG_ERROR_INDICATION && i.teid == 0);
+    CHECK(out[12] == 16 && out[13] == 0xA1 && out[16] == 0xD4);          /* TEID Data I */
+    CHECK(out[17] == 133 && out[19] == 4 && out[20] == 192 && out[23] == 7); /* peer address */
+    uint8_t a6[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    n = gtpu_make_error_indication(5, a6, 16, out, sizeof out);
+    CHECK(n == 36 && gtpu_parse(out, n, &i) == GTPU_OK);
+    CHECK(gtpu_make_error_indication(5, a6, 5, out, sizeof out) == 0);   /* bad address length */
+    CHECK(gtpu_make_error_indication(5, a6, 16, out, 30) == 0);           /* buffer too small */
+}
+
+static void test_ctl_auth_and_modes(void)
+{
+    route_table t; routes_init(&t, 16);
+    hop_t a = hop(9000);
+    routes_add(&t, 100, 200, &a.ss, a.len);
+    stats_t st; memset(&st, 0, sizeof st);
+    ctl_ctx c = { &st, &t, 1.0, 4, 1, 1, "s3cret" };
+    char out[2048];
+#define CTL(str) ctl_handle(&c, str, strlen(str), out, sizeof out)
+    CTL("stats");
+    CHECK(contains(out, "unauthorized"));
+    CTL("wrong stats");
+    CHECK(contains(out, "unauthorized"));
+    CTL("s3cretstats");
+    CHECK(contains(out, "unauthorized"));                      /* token must be a separate word */
+    CTL("s3cre stats");
+    CHECK(contains(out, "unauthorized"));
+    CTL("s3cret");
+    CHECK(contains(out, "unauthorized"));
+    CTL("s3cret stats");
+    CHECK(contains(out, "\"ok\":true") && contains(out, "\"workers\":4") &&
+          contains(out, "\"strict_inner\":true") && contains(out, "\"error_indication\":true"));
+    CTL("s3cret add 7 8 [2001:db8::2]:2152");
+    CHECK(contains(out, "\"ok\":true"));
+    CTL("s3cret routes");
+    CHECK(contains(out, "[2001:db8::2]:2152"));
+    CTL("s3cret   del 7");
+    CHECK(contains(out, "\"ok\":true"));
+
+    /* strict inner check applies to inspect; error indication is reported for unknown TEIDs */
+    CTL("s3cret inspect 30ff0003000000640a0b0c");
+    CHECK(contains(out, "\"reason\":\"bad_inner_ip\""));
+    uint8_t ip[28]; make_ipv4(ip, 28, 1);
+    char hex[200] = "s3cret inspect 30ff001c00000064";
+    for (int k = 0; k < 28; k++) sprintf(hex + strlen(hex), "%02x", ip[k]);
+    CTL(hex);
+    CHECK(contains(out, "\"action\":\"forward\""));
+    char hex2[200] = "s3cret inspect 30ff001c00000999";
+    for (int k = 0; k < 28; k++) sprintf(hex2 + strlen(hex2), "%02x", ip[k]);
+    CTL(hex2);
+    CHECK(contains(out, "no_route") && contains(out, "\"error_indication\":true"));
+#undef CTL
+    routes_free(&t);
+}
+
 int main(void)
 {
     test_valid();
@@ -225,6 +350,10 @@ int main(void)
     test_routes();
     test_routes_remove();
     test_ctl();
+    test_hops_ipv6();
+    test_inner_ip();
+    test_error_indication();
+    test_ctl_auth_and_modes();
     if (failures) { fprintf(stderr, "%d check(s) failed\n", failures); return 1; }
     puts("all unit tests passed");
     return 0;

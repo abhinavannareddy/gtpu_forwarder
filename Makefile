@@ -1,5 +1,5 @@
 CC      ?= gcc
-CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -D_DEFAULT_SOURCE
+CFLAGS  ?= -pthread -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -D_DEFAULT_SOURCE
 SRC      = src/gtpu.c src/routes.c src/ctl.c
 
 all: gtpu-fwd loadgen
@@ -36,10 +36,16 @@ dashboard:
 
 # AddressSanitizer + UBSan build of the unit tests.
 asan:
-	$(CC) -std=c11 -g -O1 -Wall -Wextra -Werror -D_DEFAULT_SOURCE \
+	$(CC) -pthread -std=c11 -g -O1 -Wall -Wextra -Werror -D_DEFAULT_SOURCE \
 	      -fsanitize=address,undefined -fno-omit-frame-pointer \
 	      -o tests/unit_asan $(SRC) tests/test_gtpu.c
 	./tests/unit_asan
+
+# Data-race check: the whole forwarder under ThreadSanitizer, driven by the
+# worker/control-socket integration tests (a reported race fails the test).
+tsan:
+	$(CC) -pthread -std=c11 -g -O1 -Wall -Wextra -Werror -D_DEFAULT_SOURCE -fsanitize=thread 	      -o gtpu-fwd-tsan $(SRC) src/main.c
+	GTPU_BIN=./tests/tsan_wrapper.sh TSAN_OPTIONS="halt_on_error=1 exitcode=66" 	      python3 -m pytest -q tests/test_features.py tests/test_control.py
 
 # Memory-error and leak check with Valgrind.
 valgrind: tests/unit
@@ -55,6 +61,6 @@ bench: gtpu-fwd loadgen
 	kill -TERM `cat .fwd.pid`; wait `cat .fwd.pid` 2>/dev/null; cat .fwd.out; rm -f .fwd.pid .fwd.out
 
 clean:
-	rm -f gtpu-fwd loadgen tests/unit tests/unit_asan .fwd.pid
+	rm -f gtpu-fwd gtpu-fwd-tsan loadgen tests/unit tests/unit_asan .fwd.pid
 
-.PHONY: all test test-unit test-integration test-js demo dashboard asan valgrind bench clean
+.PHONY: tsan all test test-unit test-integration test-js demo dashboard asan valgrind bench clean

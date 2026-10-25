@@ -1,0 +1,33 @@
+# Install: copy gtpu-fwd to /usr/local/bin, routes to /etc/gtpu/routes.conf, then
+#   sudo cp deploy/gtpu-fwd.service /etc/systemd/system/ && sudo systemctl enable --now gtpu-fwd
+# Put the control token in /etc/gtpu/env as: GTPU_CTL_TOKEN=<long random value>
+[Unit]
+Description=GTP-U user-plane forwarder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+EnvironmentFile=-/etc/gtpu/env
+ExecStart=/usr/local/bin/gtpu-fwd -r /etc/gtpu/routes.conf -b 0.0.0.0 -p 2152 -w 4 -c 9100 -C 127.0.0.1
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing: the forwarder needs UDP sockets and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

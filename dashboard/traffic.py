@@ -108,7 +108,8 @@ class TrafficGenerator:
         return gpdu(teid, bytes(64))                # unknown TEID
 
     def _run(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        family = socket.AF_INET6 if ":" in self.fwd_addr[0] else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_DGRAM)
         tick, seq, owed = 0.02, 0, 0.0
         next_t = time.perf_counter()
         try:

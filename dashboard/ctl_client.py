@@ -9,14 +9,18 @@ class CtlError(Exception):
 
 
 class CtlClient:
-    def __init__(self, host="127.0.0.1", port=9100, timeout=1.0):
+    def __init__(self, host="127.0.0.1", port=9100, timeout=1.0, token=None):
         self.addr = (host, port)
+        self.token = token or None
         self.timeout = timeout
         self._lock = threading.Lock()           # one request in flight keeps replies paired
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        self._sock = socket.socket(family, socket.SOCK_DGRAM)
         self._sock.settimeout(timeout)
 
     def call(self, command):
+        if self.token:
+            command = f"{self.token} {command}"
         with self._lock:
             try:
                 self._drain()
@@ -25,9 +29,12 @@ class CtlClient:
             except (socket.timeout, OSError) as exc:
                 raise CtlError(f"forwarder control socket unreachable: {exc}") from exc
         try:
-            return json.loads(data)
+            reply = json.loads(data)
         except ValueError as exc:
             raise CtlError("invalid reply from forwarder") from exc
+        if reply.get("error") == "unauthorized":
+            raise CtlError("forwarder rejected the control token (set --ctl-token or GTPU_CTL_TOKEN)")
+        return reply
 
     def _drain(self):
         """Discard late replies from earlier timed-out requests."""

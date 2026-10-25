@@ -16,7 +16,39 @@
     msgType: 255, teid: 1000, seq: 1, npdu: 0,
     ext: 'none',            // none | valid | zero  (needs the E flag, set automatically)
     payloadLen: 32, lengthDelta: 0, truncateTo: null,
+    payloadKind: 'opaque',   // opaque | ipv4 | ipv4-badsum | ipv6
   });
+
+  /* Inner packet carried by the G-PDU. The IPv4 variants have a real header checksum. */
+  function innerPayload(kind, n) {
+    n = Math.max(0, n | 0);
+    if (kind === 'ipv4' || kind === 'ipv4-badsum') {
+      const total = Math.max(20, n);
+      const h = [0x45, 0, total >> 8, total & 255, 0, 0, 0, 0, 64, 17, 0, 0, 10, 0, 0, 1, 10, 0, 0, 2];
+      let sum = 0;
+      for (let i = 0; i < 20; i += 2) sum += (h[i] << 8) | h[i + 1];
+      while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+      const ck = ~sum & 0xffff;
+      h[10] = ck >> 8; h[11] = ck & 255;
+      if (kind === 'ipv4-badsum') h[10] ^= 0xff;
+      return h.concat(new Array(total - 20).fill(0));
+    }
+    if (kind === 'ipv6') {
+      const total = Math.max(40, n);
+      const h = [0x60, 0, 0, 0, (total - 40) >> 8, (total - 40) & 255, 17, 64]
+        .concat([0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+      return h.concat(new Array(total - 40).fill(0));
+    }
+    return Array.from({ length: n }, (_, i) => 0x41 + (i % 26));
+  }
+
+  const INNER_DESC = {
+    opaque: 'bytes of inner packet (never inspected unless the forwarder runs with -i)',
+    ipv4: 'bytes: a valid inner IPv4 packet (version 4, correct header checksum)',
+    'ipv4-badsum': 'bytes: inner IPv4 packet with a corrupted header checksum',
+    ipv6: 'bytes: a valid inner IPv6 packet',
+  };
 
   function u32(v) { return [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255]; }
 
@@ -53,8 +85,8 @@
         field('Ext header', 'f-ext', 'One 4-byte extension: length=1 unit, 2 content bytes, next=0 (end of chain).', [1, 0x09, 0x00, 0]);
       }
     }
-    const payload = Array.from({ length: Math.max(0, o.payloadLen | 0) }, (_, i) => (0x41 + (i % 26)));
-    if (payload.length) field('Payload', 'f-pay', `${payload.length} bytes of inner packet (never inspected)`, payload);
+    const payload = innerPayload(o.payloadKind, o.payloadLen);
+    if (payload.length) field('Payload', 'f-pay', `${payload.length} ${INNER_DESC[o.payloadKind] || INNER_DESC.opaque}`, payload);
 
     const len = (bytes.length - 8 + (o.lengthDelta | 0)) & 0xffff;
     bytes[2] = len >> 8; bytes[3] = len & 255;
@@ -89,10 +121,16 @@
       blurb: 'S flag set, so 4 optional header bytes carry a sequence number.' },
     { id: 'ext', label: 'Extension header', expect: 'forward', opts: { teid: 1002, ext: 'valid' },
       blurb: 'E flag set with a PDU Session Container; the parser walks the chain.' },
+    { id: 'ipv4', label: 'Inner IPv4 packet', expect: 'forward', opts: { payloadKind: 'ipv4', payloadLen: 60 },
+      blurb: 'A G-PDU carrying a real IPv4 packet. Passes strict mode (-i) as well.' },
+    { id: 'ipv6', label: 'Inner IPv6 packet', expect: 'forward', opts: { payloadKind: 'ipv6', payloadLen: 80 },
+      blurb: 'The same tunnel carrying IPv6 user traffic.' },
+    { id: 'badsum', label: 'Bad inner checksum', expect: 'drop', opts: { payloadKind: 'ipv4-badsum', payloadLen: 60 },
+      blurb: 'Forwarded untouched by default, but dropped when the forwarder runs with -i (strict inner-IP check).' },
     { id: 'echo', label: 'Echo Request', expect: 'echo_response', opts: { msgType: 1, teid: 0, s: true, seq: 7, payloadLen: 0 },
       blurb: 'Path-management keepalive. The forwarder answers with an Echo Response.' },
     { id: 'unknown', label: 'Unknown TEID', expect: 'drop', opts: { teid: 0xdead },
-      blurb: 'Valid packet, but no route exists for this tunnel.' },
+      blurb: 'Valid packet, but no route exists. With -e the forwarder answers with an Error Indication.' },
     { id: 'version', label: 'Wrong version', expect: 'drop', opts: { version: 2 },
       blurb: 'Version field is 2. Only GTP version 1 is user-plane.' },
     { id: 'pt', label: 'GTP′ (PT=0)', expect: 'drop', opts: { pt: 0 },

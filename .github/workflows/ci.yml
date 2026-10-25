@@ -27,6 +27,8 @@ jobs:
         run: make test-js
       - name: AddressSanitizer and UBSan
         run: make asan
+      - name: ThreadSanitizer (multi-worker forwarder under load)
+        run: make tsan
       - name: Valgrind
         run: make valgrind
       - name: Build container images

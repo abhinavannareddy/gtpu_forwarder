@@ -126,6 +126,16 @@
     $('#k-echo').textContent = fmtInt(s.echo_replied);
     $('#k-up').textContent = fmtUptime(s.uptime_s);
     $('#k-routes').textContent = `${s.routes} route${s.routes === 1 ? '' : 's'} active`;
+    renderEngine(s);
+  }
+
+  function renderEngine(s) {
+    const chip = (label, on) => el('li', { class: on === false ? 'off' : '' }, el('i'), label);
+    $('#engine').replaceChildren(
+      chip(`gtpu-fwd ${s.version || ''}`.trim()),
+      chip(`${s.workers || 1} worker${s.workers === 1 ? '' : 's'}`),
+      chip(s.strict_inner ? 'strict inner-IP check' : 'inner packets not inspected', !!s.strict_inner),
+      chip(s.error_indication ? `Error Indications on (${fmtInt(s.error_indications || 0)} sent)` : 'Error Indications off', !!s.error_indication));
   }
 
   function sparkline(id, key, colorVar) {
@@ -271,6 +281,7 @@
   /* ---------------- drops ---------------- */
   const DROP_INFO = {
     no_route: ['No route for TEID', 'Valid packet, but no tunnel is configured.'],
+    bad_inner_ip: ['Invalid inner IP packet', 'Strict mode: inner IPv4/IPv6 header is malformed.'],
     unsupported_type: ['Unsupported message type', 'Only G-PDU and Echo Request are handled.'],
     too_short: ['Datagram too short', 'Shorter than the 8-byte mandatory header.'],
     bad_version: ['Wrong GTP version', 'Version field is not 1.'],
@@ -333,11 +344,12 @@
   $('#route-filter').addEventListener('input', renderRoutes);
   $('#route-form').addEventListener('submit', async ev => {
     ev.preventDefault();
-    const f = new FormData(ev.currentTarget);
+    const form = ev.currentTarget;           // currentTarget is null once we await
+    const f = new FormData(form);
     try {
       const res = await api('POST', '/api/routes', {
         in_teid: Number(f.get('in_teid')), out_teid: Number(f.get('out_teid')), next_hop: String(f.get('next_hop')).trim() });
-      if (res.ok) { toast(`Route ${f.get('in_teid')} added`); ev.currentTarget.reset(); } else toast(res.error, true);
+      if (res.ok) { toast(`Route ${f.get('in_teid')} added`); form.reset(); } else toast(res.error, true);
     } catch (e) { toast(e.message, true); }
     refreshRoutes();
   });
@@ -374,7 +386,7 @@
     const inp = ev.target;
     if (!inp.name) return;
     labOpts[inp.name] = inp.type === 'checkbox' ? inp.checked :
-      inp.tagName === 'SELECT' && inp.name === 'ext' ? inp.value : (inp.value === '' ? 0 : Number(inp.value));
+      inp.tagName === 'SELECT' && (inp.name === 'ext' || inp.name === 'payloadKind') ? inp.value : (inp.value === '' ? 0 : Number(inp.value));
     labOpts.truncateTo = null;
     currentPreset = null;
     document.querySelectorAll('#presets .chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
@@ -441,6 +453,10 @@
       if (sent.reply_hex) {
         const rb = P.fromHex(sent.reply_hex);
         extra += ` Reply received: ${P.MSG_TYPES[rb[1]] || 'type ' + rb[1]}, ${rb.length} bytes (${sent.reply_hex}).`;
+        if (rb[1] === 26 && rb.length >= 17) {
+          const td = ((rb[13] << 24) | (rb[14] << 16) | (rb[15] << 8) | rb[16]) >>> 0;
+          extra += ` Error Indication: the peer reports it has no tunnel for TEID ${td}.`;
+        }
       }
       if (seq === verdictSeq) showVerdict(verdict, extra);
       toast(`Sent ${sent.sent} packet${sent.sent > 1 ? 's' : ''}`);

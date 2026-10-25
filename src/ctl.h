@@ -7,6 +7,10 @@
  *   add <in> <out> <ip:port>    add a route at runtime
  *   del <in>                    remove a route
  *   inspect <hex>               dry-run a packet: parse + route lookup, no I/O
+ *
+ * If a token is configured every request must be "<token> <command>"; anything
+ * else is answered with {"ok":false,"error":"unauthorized"}. Next hops are
+ * "ipv4:port" or "[ipv6]:port".
  */
 #ifndef CTL_H
 #define CTL_H
@@ -16,9 +20,13 @@
 #include <stddef.h>
 
 typedef struct {
-    stats_t     *stats;
-    route_table *routes;
-    double       uptime_s;
+    const stats_t *stats;        /* total over all workers, built by the caller */
+    route_table   *routes;       /* ctl_handle takes the table lock itself */
+    double         uptime_s;
+    int            workers;
+    int            strict_inner; /* -i: inner IP validation enabled */
+    int            error_ind;    /* -e: Error Indications enabled */
+    const char    *token;        /* NULL or empty: no authentication */
 } ctl_ctx;
 
 /* Handles one request, writes a NUL-terminated JSON reply into out.

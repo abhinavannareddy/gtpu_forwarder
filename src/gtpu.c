@@ -87,6 +87,52 @@ size_t gtpu_make_echo_response(const uint8_t *req, size_t req_len,
     return 14;
 }
 
+int gtpu_inner_ok(const uint8_t *p, size_t len)
+{
+    if (len < 1)
+        return 0;
+    if ((p[0] >> 4) == 4) {
+        if (len < 20)
+            return 0;
+        size_t ihl = (size_t)(p[0] & 0x0F) * 4;
+        size_t total = (size_t)((p[2] << 8) | p[3]);
+        if (ihl < 20 || ihl > len || total < ihl || total > len)
+            return 0;
+        uint32_t sum = 0;                       /* valid header sums to 0xFFFF */
+        for (size_t i = 0; i < ihl; i += 2)
+            sum += (uint32_t)((p[i] << 8) | p[i + 1]);
+        while (sum >> 16)
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        return sum == 0xFFFF;
+    }
+    if ((p[0] >> 4) == 6) {
+        if (len < 40)
+            return 0;
+        size_t plen = (size_t)((p[4] << 8) | p[5]);
+        return plen + 40 <= len;
+    }
+    return 0;
+}
+
+size_t gtpu_make_error_indication(uint32_t teid_data, const uint8_t *local_addr,
+                                  size_t addr_len, uint8_t *out, size_t out_cap)
+{
+    if ((addr_len != 4 && addr_len != 16) || out_cap < 8 + 4 + 5 + 3 + addr_len)
+        return 0;
+    size_t body = 4 + 5 + 3 + addr_len;         /* optional header + two IEs */
+    out[0] = 0x32;                              /* version 1, PT 1, S flag */
+    out[1] = GTPU_MSG_ERROR_INDICATION;
+    out[2] = (uint8_t)(body >> 8); out[3] = (uint8_t)body;
+    wr32(out + 4, 0);                           /* TEID 0: path-level message */
+    out[8] = out[9] = out[10] = out[11] = 0;    /* sequence 0, N-PDU 0, no extension */
+    out[12] = 16;                               /* TEID Data I */
+    wr32(out + 13, teid_data);
+    out[17] = 133;                              /* GTP-U Peer Address */
+    out[18] = (uint8_t)(addr_len >> 8); out[19] = (uint8_t)addr_len;
+    memcpy(out + 20, local_addr, addr_len);
+    return 8 + body;
+}
+
 const char *gtpu_status_str(gtpu_status s)
 {
     switch (s) {
@@ -96,6 +142,7 @@ const char *gtpu_status_str(gtpu_status s)
     case GTPU_ERR_PROTO_TYPE: return "bad_protocol_type";
     case GTPU_ERR_LENGTH:     return "length_mismatch";
     case GTPU_ERR_EXT_HDR:    return "bad_extension_header";
+    case GTPU_ERR_INNER:      return "bad_inner_ip";
     default:                  return "unknown";
     }
 }

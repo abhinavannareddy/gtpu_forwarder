@@ -114,6 +114,8 @@
 </section>
 
 <!-- ============ Live ============ -->
+<ul id="engine" class="engine" aria-label="Forwarder configuration"></ul>
+
 <section id="live" class="panel-grid">
   <div class="panel wide">
     <div class="panel-head">
@@ -146,7 +148,7 @@
     <form id="route-form" class="route-form" autocomplete="off">
       <label>In TEID<input name="in_teid" type="number" min="0" max="4294967295" required placeholder="1004"></label>
       <label>Out TEID<input name="out_teid" type="number" min="0" max="4294967295" required placeholder="2004"></label>
-      <label>Next hop<input name="next_hop" type="text" required placeholder="127.0.0.1:9004" pattern="[0-9.]+:[0-9]+"></label>
+      <label>Next hop<input name="next_hop" type="text" required placeholder="127.0.0.1:9004 or [2001:db8::1]:2152"></label>
       <button class="btn primary" type="submit">Add route</button>
     </form>
     <div class="tbl-scroll">
@@ -176,6 +178,7 @@
           <label>TEID<input name="teid" type="number" min="0" max="4294967295"></label>
           <label>Payload bytes<input name="payloadLen" type="number" min="0" max="1400"></label>
           <label>Length error<input name="lengthDelta" type="number" min="-200" max="200"></label>
+          <label>Inner packet<select name="payloadKind"><option value="opaque">opaque bytes</option><option value="ipv4">IPv4 (valid)</option><option value="ipv4-badsum">IPv4 (bad checksum)</option><option value="ipv6">IPv6</option></select></label>
           <label>Extension<select name="ext"><option value="none">none</option><option value="valid">valid (PDU session)</option><option value="zero">zero length (hostile)</option></select></label>
           <label>Sequence<input name="seq" type="number" min="0" max="65535"></label>
           <label class="check"><input name="s" type="checkbox"> S flag</label>
@@ -220,9 +223,9 @@
   <ol class="steps">
     <li><span class="n">1</span><h3>Receive</h3><p><code>recvmmsg</code> pulls up to 32 datagrams per syscall into preallocated buffers.</p></li>
     <li><span class="n">2</span><h3>Validate</h3><p>Version 1, PT bit, length vs. datagram size, then a bounds-checked walk of the extension chain.</p></li>
-    <li><span class="n">3</span><h3>Classify</h3><p>Echo Request is answered; G-PDU continues; every other type is dropped.</p></li>
-    <li><span class="n">4</span><h3>Look up</h3><p>Open-addressing hash table keyed by TEID, O(1), with per-route counters.</p></li>
-    <li><span class="n">5</span><h3>Rewrite &amp; send</h3><p>The 4-byte TEID is overwritten in place and the datagram goes to the next hop.</p></li>
+    <li><span class="n">3</span><h3>Classify</h3><p>Echo Request is answered; G-PDU continues (optionally with an inner IP check); every other type is dropped.</p></li>
+    <li><span class="n">4</span><h3>Look up</h3><p>Open-addressing hash table keyed by TEID, O(1), with per-route counters. Unknown TEID: drop, optionally with an Error Indication.</p></li>
+    <li><span class="n">5</span><h3>Rewrite &amp; send</h3><p>The 4-byte TEID is overwritten in place and the datagram goes to the IPv4 or IPv6 next hop.</p></li>
   </ol>
 
   <div class="panel hdr-panel">
@@ -237,10 +240,10 @@
   </div>
 
   <div class="facts">
-    <div><b>IPv4</b><span>next hops and sockets</span></div>
-    <div><b>32</b><span>packets per recvmmsg batch</span></div>
+    <div><b>IPv4 + IPv6</b><span>listeners and next hops</span></div>
+    <div><b>N workers</b><span>SO_REUSEPORT, order kept per flow</span></div>
     <div><b>0</b><span>heap allocation on the hot path</span></div>
-    <div><b>ASan + Valgrind</b><span>clean in CI</span></div>
+    <div><b>ASan &middot; TSan &middot; Valgrind</b><span>clean in CI</span></div>
   </div>
 </section>
 </main>

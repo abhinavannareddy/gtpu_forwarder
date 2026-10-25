@@ -1,4 +1,5 @@
 gtpu-fwd
+gtpu-fwd-tsan
 loadgen
 tests/unit
 tests/unit_asan
